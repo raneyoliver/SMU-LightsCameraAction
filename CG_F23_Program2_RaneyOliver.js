@@ -1,256 +1,378 @@
-const canvas = document.getElementById('canvas');
-const gl = canvas.getContext('webgl');
+"use strict";
 
-if (!gl) {
-    alert('WebGL not supported!');
-    throw new Error('WebGL not supported');
-}
+var canvas;
+var gl;
+var program;
 
-// Define the vertices for a unit cube.
-const cubeVertices = [
-    // Front face
-    -0.5, -0.5,  0.5,
-     0.5, -0.5,  0.5,
-     0.5,  0.5,  0.5,
-    -0.5,  0.5,  0.5,
-    
-    // Back face
-    -0.5, -0.5, -0.5,
-     0.5, -0.5, -0.5,
-     0.5,  0.5, -0.5,
-    -0.5,  0.5, -0.5,
-    
-    // Top face
-    -0.5,  0.5, -0.5,
-     0.5,  0.5, -0.5,
-     0.5,  0.5,  0.5,
-    -0.5,  0.5,  0.5,
-    
-    // Bottom face
-    -0.5, -0.5, -0.5,
-     0.5, -0.5, -0.5,
-     0.5, -0.5,  0.5,
-    -0.5, -0.5,  0.5,
-    
-    // Right face
-     0.5, -0.5, -0.5,
-     0.5,  0.5, -0.5,
-     0.5,  0.5,  0.5,
-     0.5, -0.5,  0.5,
-    
-    // Left face
-    -0.5, -0.5, -0.5,
-    -0.5,  0.5, -0.5,
-    -0.5,  0.5,  0.5,
-    -0.5, -0.5,  0.5,
+var projectionMatrix;
+var modelViewMatrix;
+
+var instanceMatrix;
+
+var modelViewMatrixLoc;
+var projectionMatrixLoc;
+var nMatrix, nMatrixLoc;
+var lightPosLoc;
+var colorLoc;
+
+// cube points
+var vertices = [
+
+    vec4(-0.5, -0.5, 0.5, 1.0),
+    vec4(-0.5, 0.5, 0.5, 1.0),
+    vec4(0.5, 0.5, 0.5, 1.0),
+    vec4(0.5, -0.5, 0.5, 1.0),
+    vec4(-0.5, -0.5, -0.5, 1.0),
+    vec4(-0.5, 0.5, -0.5, 1.0),
+    vec4(0.5, 0.5, -0.5, 1.0),
+    vec4(0.5, -0.5, -0.5, 1.0)
 ];
 
-// Define the indices for the cube vertices.
-const cubeIndices = [
-    0, 1, 2,      0, 2, 3,    // Front face
-    4, 5, 6,      4, 6, 7,    // Back face
-    8, 9, 10,     8, 10, 11,  // Top face
-    12, 13, 14,   12, 14, 15, // Bottom face
-    16, 17, 18,   16, 18, 19, // Right face
-    20, 21, 22,   20, 22, 23  // Left face
-];
 
-// Create and bind the vertex buffer.
-const vertexBuffer = gl.createBuffer();
-gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
-gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(cubeVertices), gl.STATIC_DRAW);
+var baseId = 0;
+var middleId = 1;
+var outerId = 2;
 
-// Create and bind the index buffer.
-const indexBuffer = gl.createBuffer();
-gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
-gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(cubeIndices), gl.STATIC_DRAW);
+var baseHeight = 1.0;
+var baseWidth = 1.0;
+var middleHeight = 3.0;
+var outerHeight = 2.0;
+var middleWidth = 0.5;
+var outerWidth = 0.5;
 
-// Vertex shader program
-const vsSource = `
-    attribute vec4 aVertexPosition;
-    uniform mat4 uModelViewMatrix;
-    uniform mat4 uProjectionMatrix;
-    void main(void) {
-        gl_Position = uProjectionMatrix * uModelViewMatrix * aVertexPosition;
-    }`;
+var lightPosition = vec4(1.0, 1.0, 1.0, 0.0);
+var lightAmbient = vec4(0.2, 0.2, 0.2, 1.0);
+var lightDiffuse = vec4(1.0, 1.0, 1.0, 1.0);
+var lightSpecular = vec4(1.0, 1.0, 1.0, 1.0);
 
-// Fragment shader program
-const fsSource = `
-    void main(void) {
-        gl_FragColor = vec4(1.0, 0.85, 0.7, 1.0);
-    }`;
+var materialAmbient = vec4(1.0, 0.0, 1.0, 1.0);
+var materialDiffuse = vec4(1.0, 0.8, 0.0, 1.0);
+var materialSpecular = vec4(1.0, 1.0, 1.0, 1.0);
+var materialShininess = 20.0;
 
-const vertexShader = loadShader(gl, gl.VERTEX_SHADER, vsSource);
-const fragmentShader = loadShader(gl, gl.FRAGMENT_SHADER, fsSource);
+var numNodes = 3;   // base, middle, outer
+var theta = [30, 30, 70];
+var numAngles = theta.length;
+var angle = 0;
 
-// Create the shader program
-const shaderProgram = gl.createProgram();
-gl.attachShader(shaderProgram, vertexShader);
-gl.attachShader(shaderProgram, fragmentShader);
-gl.linkProgram(shaderProgram);
+var stack = [];
+var figure = [];
 
-if (!gl.getProgramParameter(shaderProgram, gl.LINK_STATUS)) {
-    alert('Unable to initialize the shader program: ' + gl.getProgramInfoLog(shaderProgram));
+// for tree traversal
+for (var i = 0; i < numNodes; i++) figure[i] = createNode(null, null, null, null);
+
+var vBuffer;
+var modelViewLoc;
+
+var pointsArray = [];
+var normalsArray = [];
+var meshStart;
+
+// t = theta of mesh
+var t = -.4;
+var phi = 4.3;
+var radius = 8.0;
+var dr = 5.0 * Math.PI / 180.0;
+
+const black = vec4(0.0, 0.0, 0.0, 1.0);
+const red = vec4(1.0, 0.0, 0.0, 1.0);
+
+// lookAt
+const at = vec3(0.0, 0.0, 0.0);
+const up = vec3(0.0, 1.0, 0.0);
+var left = -2.0;
+var right = 2.0;
+var bottom = -2.0;
+var near = -10;
+var far = 10;
+
+init();
+
+function scale4(a, b, c) {
+    var result = mat4();
+    result[0] = a;
+    result[5] = b;
+    result[10] = c;
+    return result;
 }
 
-function loadShader(gl, type, source) {
-    const shader = gl.createShader(type);
-    gl.shaderSource(shader, source);
-    gl.compileShader(shader);
+function createNode(transform, render, sibling, child) {
+    var node = {
+        transform: transform,
+        render: render,
+        sibling: sibling,
+        child: child,
+    }
+    return node;
+}
 
-    if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
-        alert('An error occurred compiling the shaders: ' + gl.getShaderInfoLog(shader));
-        gl.deleteShader(shader);
-        return null;
+
+function initNodes(Id) {
+
+    var m = mat4();
+
+    switch (Id) {
+
+        case baseId:
+
+            m = rotate(theta[baseId], vec3(0, 1, 0));
+            figure[baseId] = createNode(m, base, null, middleId);   // base -> middle
+            break;
+
+        case middleId:
+
+            m = translate(-(baseWidth / 2.5 + middleWidth), baseHeight, 0.0);
+            m = mult(m, rotate(theta[middleId], vec3(0, 0, 1)));
+            figure[middleId] = createNode(m, leftmiddle, null, outerId);    // middle -> outer
+            break;
+
+        case outerId:
+
+            m = translate(0.0, middleHeight, 0.0);
+            m = mult(m, rotate(theta[outerId], vec3(0, 0, 1)));
+            figure[outerId] = createNode(m, leftouter, null, null);
+            break;
     }
 
-    return shader;
 }
 
-function create() {
-    let mat = new Float32Array(16);
-    mat[0] = 1;
-    mat[5] = 1;
-    mat[10] = 1;
-    mat[15] = 1;
-    return mat;
+function traverse(Id) {
+
+    if (Id == null) return;
+    stack.push(modelViewMatrix);
+    modelViewMatrix = mult(modelViewMatrix, figure[Id].transform);  // mult concatenated viewmatrix
+    figure[Id].render();
+    if (figure[Id].child != null) traverse(figure[Id].child);       // traverse down
+    modelViewMatrix = stack.pop();
+    if (figure[Id].sibling != null) traverse(figure[Id].sibling);   // traverse side (not used)
 }
 
-function perspective(out, fovy, aspect, near, far) {
-    let f = 1.0 / Math.tan(fovy / 2),
-        nf = 1 / (near - far);
-    out[0] = f / aspect;
-    out[1] = 0;
-    out[2] = 0;
-    out[3] = 0;
-    out[4] = 0;
-    out[5] = f;
-    out[6] = 0;
-    out[7] = 0;
-    out[8] = 0;
-    out[9] = 0;
-    out[10] = (far + near) * nf;
-    out[11] = -1;
-    out[12] = 0;
-    out[13] = 0;
-    out[14] = (2 * far * near) * nf;
-    out[15] = 0;
-    return out;
+function base() {
+
+    instanceMatrix = mult(modelViewMatrix, translate(0.0, 0.5 * baseHeight, 0.0));  // get current view from render
+    instanceMatrix = mult(instanceMatrix, scale(baseWidth, baseHeight, baseWidth));
+    gl.uniformMatrix4fv(modelViewMatrixLoc, false, flatten(instanceMatrix));
+    for (var i = 0; i < 6; i++) gl.drawArrays(gl.TRIANGLE_FAN, 4 * i, 4);
 }
 
-function translate(out, a, v) {
-    let x = v[0], y = v[1], z = v[2];
-    if (a === out) {
-        out[12] = a[0] * x + a[4] * y + a[8] * z + a[12];
-        out[13] = a[1] * x + a[5] * y + a[9] * z + a[13];
-        out[14] = a[2] * x + a[6] * y + a[10] * z + a[14];
-        out[15] = a[3] * x + a[7] * y + a[11] * z + a[15];
-    } else {
-        let a00, a01, a02, a03;
-        a00 = a[0];
-        a01 = a[1];
-        a02 = a[2];
-        a03 = a[3];
-        let a10 = a[4], a11 = a[5], a12 = a[6], a13 = a[7];
-        let a20 = a[8], a21 = a[9], a22 = a[10], a23 = a[11];
+function leftmiddle() {
 
-        out[0] = a00;
-        out[1] = a01;
-        out[2] = a02;
-        out[3] = a03;
-        out[4] = a10;
-        out[5] = a11;
-        out[6] = a12;
-        out[7] = a13;
-        out[8] = a20;
-        out[9] = a21;
-        out[10] = a22;
-        out[11] = a23;
-
-        out[12] = a00 * x + a10 * y + a20 * z + a[12];
-        out[13] = a01 * x + a11 * y + a21 * z + a[13];
-        out[14] = a02 * x + a12 * y + a22 * z + a[14];
-        out[15] = a03 * x + a13 * y + a23 * z + a[15];
-    }
-    return out;
+    instanceMatrix = mult(modelViewMatrix, translate(0.0, 0.5 * middleHeight, 0.0));    // get current view from render
+    instanceMatrix = mult(instanceMatrix, scale(middleWidth, middleHeight, middleWidth));
+    gl.uniformMatrix4fv(modelViewMatrixLoc, false, flatten(instanceMatrix));
+    for (var i = 0; i < 6; i++) gl.drawArrays(gl.TRIANGLE_FAN, 4 * i, 4);
 }
 
-function scale(out, a, v) {
-    let x = v[0], y = v[1], z = v[2];
-    out[0] = a[0] * x;
-    out[1] = a[1] * x;
-    out[2] = a[2] * x;
-    out[3] = a[3] * x;
-    out[4] = a[4] * y;
-    out[5] = a[5] * y;
-    out[6] = a[6] * y;
-    out[7] = a[7] * y;
-    out[8] = a[8] * z;
-    out[9] = a[9] * z;
-    out[10] = a[10] * z;
-    out[11] = a[11] * z;
-    out[12] = a[12];
-    out[13] = a[13];
-    out[14] = a[14];
-    out[15] = a[15];
-    return out;
+function leftouter() {
+
+    instanceMatrix = mult(modelViewMatrix, translate(0.0, 0.5 * outerHeight, 0.0)); // get current view from render
+    instanceMatrix = mult(instanceMatrix, scale(outerWidth, outerHeight, outerWidth));
+    gl.uniformMatrix4fv(modelViewMatrixLoc, false, flatten(instanceMatrix));
+    for (var i = 0; i < 6; i++) gl.drawArrays(gl.TRIANGLE_FAN, 4 * i, 4);
+}
+
+function quad(a, b, c, d) {
+    pointsArray.push(vertices[a]);
+    pointsArray.push(vertices[b]);
+    pointsArray.push(vertices[c]);
+    pointsArray.push(vertices[d]);
+
+    // get cross product of 3 points (2 vectors) to get the normal vector for lighting
+    var t1 = subtract(vertices[b], vertices[a]);
+    var t2 = subtract(vertices[c], vertices[a]);
+    var normal = normalize(cross(t2, t1));
+    normal = vec4(normal[0], normal[1], normal[2], 0.0);
+
+    normalsArray.push(normal);
+    normalsArray.push(normal);
+    normalsArray.push(normal);
+    normalsArray.push(normal);
 }
 
 
-// Draw the hand
-function drawHand() {
-    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+function cube() {
+    quad(1, 0, 3, 2);
+    quad(2, 3, 7, 6);
+    quad(3, 0, 4, 7);
+    quad(6, 5, 1, 2);
+    quad(4, 5, 6, 7);
+    quad(5, 4, 0, 1);
+}
 
-    const projectionMatrix = mat4.create();
-    const modelViewMatrix = mat4.create();
-    mat4.perspective(projectionMatrix, 45 * Math.PI / 180, canvas.width / canvas.height, 0.1, 100.0);
-    mat4.translate(modelViewMatrix, modelViewMatrix, [0.0, 0.0, -7.0]);
 
-    // Draw palm
-    mat4.scale(modelViewMatrix, modelViewMatrix, [1.5, 2, 0.5]);
-    drawCube(modelViewMatrix, projectionMatrix);
+function init() {
 
-    // Draw fingers
-    const fingerScale = [0.3, 0.7, 0.3];
-    const fingerOffsets = [
-        [-1.0, 2.2, 0],
-        [-0.5, 2.2, 0],
-        [0.5, 2.2, 0],
-        [1.0, 2.2, 0]
-    ];
+    canvas = document.getElementById("gl-canvas");
 
-    for(let offset of fingerOffsets) {
-        for(let i = 0; i < 3; i++) {
-            mat4.translate(modelViewMatrix, modelViewMatrix, [offset[0], offset[1] - i * 0.7, offset[2]]);
-            mat4.scale(modelViewMatrix, modelViewMatrix, fingerScale);
-            drawCube(modelViewMatrix, projectionMatrix);
-            mat4.scale(modelViewMatrix, modelViewMatrix, [1/fingerScale[0], 1/fingerScale[1], 1/fingerScale[2]]);
+    // change size, rotation of mesh
+    document.getElementById("Button3").onclick = function () { radius *= 2.0; };
+    document.getElementById("Button4").onclick = function () { radius *= 0.5; };
+    document.getElementById("Button5").onclick = function () { t += dr; };
+    document.getElementById("Button6").onclick = function () { t -= dr; };
+    document.getElementById("Button7").onclick = function () { phi += dr; };
+    document.getElementById("Button8").onclick = function () { phi -= dr; };
+
+    gl = canvas.getContext('webgl2');
+    if (!gl) { alert("WebGL 2.0 isn't available"); }
+
+    gl.viewport(0, 0, canvas.width, canvas.height);
+    gl.clearColor(1.0, 1.0, 1.0, 1.0);
+
+    // enable depth test
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthFunc(gl.LEQUAL);
+    gl.enable(gl.POLYGON_OFFSET_FILL);
+    gl.polygonOffset(1.0, 2.0);
+
+    // connect shaders to program
+    program = initShaders(gl, "vertex-shader", "fragment-shader");
+
+    gl.useProgram(program);
+
+    instanceMatrix = mat4();
+
+    // orthogonal projection
+    projectionMatrix = ortho(-10.0, 10.0, -10.0, 10.0, -10.0, 10.0);
+    modelViewMatrix = mat4();
+
+    var ambientProduct = mult(lightAmbient, materialAmbient);
+    var diffuseProduct = mult(lightDiffuse, materialDiffuse);
+    var specularProduct = mult(lightSpecular, materialSpecular);
+
+    gl.uniformMatrix4fv(gl.getUniformLocation(program, "modelViewMatrix"), false, flatten(modelViewMatrix));
+    gl.uniformMatrix4fv(gl.getUniformLocation(program, "projectionMatrix"), false, flatten(projectionMatrix));
+
+    modelViewMatrixLoc = gl.getUniformLocation(program, "modelViewMatrix")
+    projectionMatrixLoc = gl.getUniformLocation(program, "uProjectionMatrix");
+    nMatrixLoc = gl.getUniformLocation(program, "uNormalMatrix");
+
+
+    // initial pointsArray addition
+    cube();
+
+    // mesh
+    var nRows = 50;
+    var nColumns = 50;
+    var data = [];
+    for (var i = 0; i < nRows; ++i) {
+        data.push([]);
+        var x = Math.PI * (4 * i / nRows - 2.0);
+
+        for (var j = 0; j < nColumns; ++j) {
+            var y = Math.PI * (4 * j / nRows - 2.0);
+            var r = Math.sqrt(x * x + y * y);
+
+            // take care of 0/0 for r = 0
+
+            data[i][j] = r ? Math.sin(r) / r : 1.0;
         }
     }
+    meshStart = pointsArray.length
+
+    //set size, offsets of mesh
+    const increase = 25
+    const xOffset = -5
+    const yOffset = 0
+    const zOffset = 0
+    for (var i = 0; i < nRows - 1; i++) {
+        for (var j = 0; j < nColumns - 1; j++) {
+            pointsArray.push(vec4(increase * i / nRows - 1 + xOffset,        data[i][j] + yOffset,         increase * j / nColumns - 1 + zOffset,           1.0));
+            pointsArray.push(vec4(increase * (i + 1) / nRows - 1 + xOffset,  data[i + 1][j] + yOffset,     increase * j / nColumns - 1 + zOffset,           1.0));
+            pointsArray.push(vec4(increase * (i + 1) / nRows - 1 + xOffset,  data[i + 1][j + 1] + yOffset, increase * (j + 1) / nColumns - 1 + zOffset,     1.0));
+            pointsArray.push(vec4(increase * i / nRows - 1 + xOffset,        data[i][j + 1] + yOffset,     increase * (j + 1) / nColumns - 1 + zOffset,     1.0));
+        }
+    }
+
+    vBuffer = gl.createBuffer();
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, vBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, flatten(pointsArray), gl.STATIC_DRAW);
+
+    var positionLoc = gl.getAttribLocation(program, "aPosition");
+    gl.vertexAttribPointer(positionLoc, 4, gl.FLOAT, false, 0, 0);
+    gl.enableVertexAttribArray(positionLoc);
+
+    var normalLoc = gl.getAttribLocation(program, "aNormal");
+    gl.vertexAttribPointer(normalLoc, 4, gl.FLOAT, false, 0, 0);
+    gl.enableVertexAttribArray(normalLoc);
+
+    // sliders to rotate each part of the Pixar Lamp
+    document.getElementById("slider0").onchange = function (event) {
+        theta[baseId] = event.target.value;
+        initNodes(baseId);
+    };
+    document.getElementById("slider2").onchange = function (event) {
+        theta[middleId] = event.target.value;
+        initNodes(middleId);
+    };
+    document.getElementById("slider3").onchange = function (event) {
+        theta[outerId] = event.target.value;
+        initNodes(outerId);
+    };
+
+    // slider to move the light around
+    document.getElementById("sliderL").onchange = function (event) {
+        lightPosition[0] = event.target.value;
+        gl.uniform4fv(lightPosLoc, vec4(event.target.value, lightPosition[1], lightPosition[2], lightPosition[3]));
+
+    };
+
+    // initialize base, middle, outer (draw)
+    for (i = 0; i < numNodes; i++) initNodes(i);
+
+    gl.uniform4fv( gl.getUniformLocation(program,
+        "uAmbientProduct"),flatten(ambientProduct));
+    gl.uniform4fv( gl.getUniformLocation(program,
+    "uDiffuseProduct"),flatten(diffuseProduct));
+    gl.uniform4fv( gl.getUniformLocation(program,
+    "uSpecularProduct"),flatten(specularProduct));
+    gl.uniform4fv( gl.getUniformLocation(program,
+    "uLightPosition"),flatten(lightPosition));
+    gl.uniform1f( gl.getUniformLocation(program,
+    "uShininess"),materialShininess);
+
+    lightPosLoc = gl.getUniformLocation(program, "uLightPosition")
+
+    render();
 }
 
-function drawCube(modelViewMatrix, projectionMatrix) {
-    gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
 
-    const vertexPosition = gl.getAttribLocation(shaderProgram, 'aVertexPosition');
-    gl.vertexAttribPointer(vertexPosition, 3, gl.FLOAT, false, 0, 0);
-    gl.enableVertexAttribArray(vertexPosition);
+function render() {
 
-    gl.useProgram(shaderProgram);
+    gl.clear(gl.COLOR_BUFFER_BIT);
 
-    const uModelViewMatrix = gl.getUniformLocation(shaderProgram, 'uModelViewMatrix');
-    const uProjectionMatrix = gl.getUniformLocation(shaderProgram, 'uProjectionMatrix');
+    // calc where camera looks every frame based on user input
+    var eye = vec3(radius * Math.sin(t) * Math.cos(phi),
+        radius * Math.sin(t) * Math.sin(phi),
+        radius * Math.cos(t));
 
-    gl.uniformMatrix4fv(uModelViewMatrix, false, modelViewMatrix);
-    gl.uniformMatrix4fv(uProjectionMatrix, false, projectionMatrix);
+    colorLoc = gl.getUniformLocation(program, "uColor");
 
-    gl.drawElements(gl.TRIANGLES, cubeIndices.length, gl.UNSIGNED_SHORT, 0);
+
+    var modelViewMatrix = lookAt(eye, at, up);
+    var projectionMatrix = ortho(left, right, bottom, top, near, far);
+    nMatrix = normalMatrix(modelViewMatrix, true);
+
+    gl.uniformMatrix4fv(modelViewMatrixLoc, false, flatten(modelViewMatrix));
+    gl.uniformMatrix4fv(projectionMatrixLoc, false, flatten(projectionMatrix));
+    gl.uniformMatrix3fv(nMatrixLoc, false, flatten(nMatrix)  );
+    
+    // draw mesh
+    for (var i = meshStart; i < pointsArray.length; i += 4) {
+        gl.uniform4fv(colorLoc, red);
+        gl.drawArrays(gl.TRIANGLE_FAN, i, 4);
+        gl.uniform4fv(colorLoc, black);
+        gl.drawArrays(gl.LINE_LOOP, i, 4);
+    }
+
+    gl.uniform4fv(colorLoc, red);
+
+    // edit rotations by traversing from base -> middle -> outer
+    // each modelviewmatrix gets concatenated as it goes so that
+    // the latter transformations are based on the former.
+    traverse(baseId);
+
+    
+
+    requestAnimationFrame(render);
 }
-
-gl.clearColor(0.5, 0.5, 0.5, 1.0);
-gl.clearDepth(1.0);
-gl.enable(gl.DEPTH_TEST);
-gl.depthFunc(gl.LEQUAL);
-
-drawHand();
